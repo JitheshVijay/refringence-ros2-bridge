@@ -1,0 +1,32 @@
+# Default ROS 2 topic subscriptions for the Refringence bridge.
+# Override with --topics flag or custom config file.
+
+subscriptions:
+  - topic: /joint_states
+    msg_type: sensor_msgs/msg/JointState
+    rate_hz: 30
+
+  - topic: /tf
+    msg_type: tf2_msgs/msg/TFMessage
+    rate_hz: 30
+
+  - topic: /clock
+    msg_type: rosgraph_msgs/msg/Clock
+    rate_hz: 10
+
+# Optional sensor topics (uncomment to enable)
+#  - topic: /imu/data
+#    msg_type: sensor_msgs/msg/Imu
+#    rate_hz: 10
+#
+#  - topic: /scan
+#    msg_type: sensor_msgs/msg/LaserScan
+#    rate_hz: 5
+#
+#  - topic: /camera/depth/points
+#    msg_type: sensor_msgs/msg/PointCloud2
+#    rate_hz: 10
+#
+#  - topic: /camera/image_raw
+#    msg_type: sensor_msgs/msg/Image
+#    rate_hz: 2
