@@ -158,6 +158,46 @@ async def _demo_loop(
                 except Exception:
                     pass  # PIL not installed — skip camera demo
 
+            # ── Demo diagnostics: every 10s
+            if tick % (rate_hz * 10) == 0:
+                await connector.emit_diagnostics({
+                    "statuses": [
+                        {
+                            "level": 0,  # OK
+                            "name": "Motor Controller",
+                            "message": "All motors operational",
+                            "hardware_id": "motor_controller",
+                            "values": [
+                                {"key": "voltage", "value": f"{12.0 + math.sin(t) * 0.3:.1f}V"},
+                                {"key": "temperature", "value": f"{45.0 + math.sin(t * 0.2) * 5:.1f}C"},
+                            ],
+                        },
+                        {
+                            "level": 1 if int(t) % 20 < 10 else 0,  # alternating WARN/OK
+                            "name": "Battery",
+                            "message": "Low battery" if int(t) % 20 < 10 else "Battery OK",
+                            "hardware_id": "power_system",
+                            "values": [
+                                {"key": "percentage", "value": f"{max(20, 80 - t * 0.1):.0f}%"},
+                                {"key": "voltage", "value": f"{11.5 + math.cos(t * 0.05) * 0.5:.2f}V"},
+                            ],
+                        },
+                    ],
+                })
+
+            # ── Demo GPS: circular path around San Francisco (~2Hz)
+            if tick % max(1, rate_hz // 2) == 0:
+                lat = 37.7749 + 0.001 * math.sin(t * 0.1)
+                lon = -122.4194 + 0.001 * math.cos(t * 0.1)
+                alt = 10.0 + math.sin(t * 0.3) * 2.0
+                await connector.emit_navsatfix({
+                    "latitude": lat,
+                    "longitude": lon,
+                    "altitude": alt,
+                    "status": 0,  # fix
+                    "timestamp": t,
+                })
+
             tick += 1
             t += interval
             await asyncio.sleep(interval)

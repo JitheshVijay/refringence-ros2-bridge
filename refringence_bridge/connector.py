@@ -58,7 +58,7 @@ class RefringenceConnector:
         self._sio.on("error:mesh_upload", self._on_mesh_upload_error, namespace="/robotics")
 
         # Forward command events to registered callbacks
-        for event in ("command:joint", "command:spawn", "command:reset", "command:custom"):
+        for event in ("command:joint", "command:spawn", "command:reset", "command:custom", "command:twist"):
             self._sio.on(event, self._make_command_handler(event), namespace="/robotics")
 
     # ── Connection lifecycle ──────────────────────────────────────────────
@@ -151,6 +151,18 @@ class RefringenceConnector:
         if not self._rate_check():
             return
         await self._emit("telemetry:camera_info", info_data)
+
+    async def emit_diagnostics(self, diag_data: Dict[str, Any]) -> None:
+        """Emit diagnostic status array."""
+        if not self._rate_check():
+            return
+        await self._emit("telemetry:diagnostics", diag_data)
+
+    async def emit_navsatfix(self, data: Dict[str, Any]) -> None:
+        """Emit GPS NavSatFix data."""
+        if not self._rate_check():
+            return
+        await self._emit("telemetry:navsatfix", data)
 
     # ── Robot description ─────────────────────────────────────────────────
 

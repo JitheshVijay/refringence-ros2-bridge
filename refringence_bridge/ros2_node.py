@@ -33,6 +33,9 @@ def run_ros2_node(token: str, server_url: str, rate_hz: int = 30) -> None:
         rosout_to_dict,
         image_to_dict,
         camera_info_to_dict,
+        diagnostic_array_to_dict,
+        navsatfix_to_dict,
+        dict_to_twist,
     )
     from refringence_bridge.asset_sync import (
         discover_urdf_from_param,
@@ -61,6 +64,10 @@ def run_ros2_node(token: str, server_url: str, rate_hz: int = 30) -> None:
             self._latest_camera_image = None
             self._latest_camera_info = None
             self._camera_tick = 0  # emit every 5th tick (~6fps at 30Hz timer)
+            self._latest_diagnostics: list = []
+            self._diag_tick = 0  # emit every 30th tick (~1Hz at 30Hz timer)
+            self._latest_navsatfix = None
+            self._gps_tick = 0  # emit every 15th tick (~2Hz at 30Hz timer)
 
             # Parameters
             self.declare_parameter("token", token)
@@ -119,14 +126,45 @@ def run_ros2_node(token: str, server_url: str, rate_hz: int = 30) -> None:
                 self._cam_info_sub = None
                 self.get_logger().info("sensor_msgs/Image not available, camera topics not subscribed")
 
+            # Try subscribing to /diagnostics
+            try:
+                from diagnostic_msgs.msg import DiagnosticArray
+                self._diag_sub = self.create_subscription(
+                    DiagnosticArray, "/diagnostics", self._on_diagnostics, 10
+                )
+            except ImportError:
+                self._diag_sub = None
+                self.get_logger().info("diagnostic_msgs not available, /diagnostics not subscribed")
+
+            # Try subscribing to /fix (GPS NavSatFix)
+            try:
+                from sensor_msgs.msg import NavSatFix
+                self._gps_sub = self.create_subscription(
+                    NavSatFix, "/fix", self._on_navsatfix, 10
+                )
+            except ImportError:
+                self._gps_sub = None
+                self.get_logger().info("NavSatFix not available, /fix not subscribed")
+
+            # Try creating /cmd_vel publisher for teleop
+            try:
+                from geometry_msgs.msg import Twist
+                self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+                self._Twist = Twist
+            except ImportError:
+                self._cmd_vel_pub = None
+                self._Twist = None
+                self.get_logger().info("geometry_msgs not available, /cmd_vel not published")
+
             # Timer for rate-limited telemetry emission
             self._publish_timer = self.create_timer(
                 1.0 / self._rate_hz, self._publish_telemetry
             )
 
-            # Register command handler
+            # Register command handlers
             self._connector.on_command("command:joint", self._handle_joint_command)
             self._connector.on_command("command:reset", self._handle_reset_command)
+            self._connector.on_command("command:twist", self._handle_twist_command)
 
             self.get_logger().info(
                 "Refringence bridge node initialized (rate=%d Hz)", self._rate_hz
@@ -168,6 +206,16 @@ def run_ros2_node(token: str, server_url: str, rate_hz: int = 30) -> None:
             with self._data_lock:
                 self._latest_camera_info = msg
 
+        def _on_diagnostics(self, msg: "Any") -> None:
+            with self._data_lock:
+                self._latest_diagnostics.append(msg)
+                if len(self._latest_diagnostics) > 20:
+                    self._latest_diagnostics = self._latest_diagnostics[-20:]
+
+        def _on_navsatfix(self, msg: "Any") -> None:
+            with self._data_lock:
+                self._latest_navsatfix = msg
+
         # ── Rate-limited telemetry emission ───────────────────────────────
 
         def _publish_telemetry(self) -> None:
@@ -200,6 +248,22 @@ def run_ros2_node(token: str, server_url: str, rate_hz: int = 30) -> None:
                     self._latest_camera_image = None
                     self._latest_camera_info = None
                     self._camera_tick = 0
+
+                # Diagnostics: ~1Hz (every 30th tick)
+                self._diag_tick += 1
+                diag_msgs = []
+                if self._diag_tick >= 30:
+                    diag_msgs = list(self._latest_diagnostics)
+                    self._latest_diagnostics.clear()
+                    self._diag_tick = 0
+
+                # GPS: ~2Hz (every 15th tick)
+                self._gps_tick += 1
+                gps = None
+                if self._gps_tick >= 15:
+                    gps = self._latest_navsatfix
+                    self._latest_navsatfix = None
+                    self._gps_tick = 0
 
                 # Clear after snapshot to avoid re-sending stale data
                 self._latest_joint_state = None
@@ -275,6 +339,22 @@ def run_ros2_node(token: str, server_url: str, rate_hz: int = 30) -> None:
                 )
                 fut.add_done_callback(lambda f: _log_future_exception(f, "camera_info"))
 
+            for diag_msg in diag_msgs:
+                diag_data = diagnostic_array_to_dict(diag_msg)
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._connector.emit_diagnostics(diag_data),
+                    self._loop,
+                )
+                fut.add_done_callback(lambda f: _log_future_exception(f, "diagnostics"))
+
+            if gps is not None:
+                gps_data = navsatfix_to_dict(gps)
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._connector.emit_navsatfix(gps_data),
+                    self._loop,
+                )
+                fut.add_done_callback(lambda f: _log_future_exception(f, "navsatfix"))
+
         # ── Command handlers ──────────────────────────────────────────────
 
         def _handle_joint_command(self, data: dict) -> None:
@@ -287,6 +367,21 @@ def run_ros2_node(token: str, server_url: str, rate_hz: int = 30) -> None:
             """Handle simulation reset command."""
             self.get_logger().info("Reset command received")
             # Could call /reset_simulation service
+
+        def _handle_twist_command(self, data: dict) -> None:
+            """Publish received twist command to /cmd_vel."""
+            if self._cmd_vel_pub is None or self._Twist is None:
+                self.get_logger().debug("Twist command ignored: /cmd_vel publisher not available")
+                return
+            twist_data = dict_to_twist(data)
+            msg = self._Twist()
+            msg.linear.x = twist_data["linear_x"]
+            msg.linear.y = twist_data["linear_y"]
+            msg.linear.z = twist_data["linear_z"]
+            msg.angular.x = twist_data["angular_x"]
+            msg.angular.y = twist_data["angular_y"]
+            msg.angular.z = twist_data["angular_z"]
+            self._cmd_vel_pub.publish(msg)
 
     # ── Main loop ─────────────────────────────────────────────────────────
 

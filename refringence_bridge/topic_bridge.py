@@ -10,8 +10,16 @@ from typing import Any, Dict, List, Optional
 
 
 def _sanitize_floats(values: list) -> list:
-    """Replace NaN/Inf with 0.0 to prevent JSON serialization errors."""
-    return [0.0 if (math.isnan(v) or math.isinf(v)) else v for v in values]
+    """Replace NaN/Inf with 0.0 to prevent JSON serialization errors.
+    Handles non-float types (ints, numpy scalars) safely."""
+    out = []
+    for v in values:
+        try:
+            fv = float(v)
+            out.append(0.0 if (math.isnan(fv) or math.isinf(fv)) else fv)
+        except (TypeError, ValueError):
+            out.append(0.0)
+    return out
 
 
 def _has_values(seq: Any) -> bool:
@@ -67,11 +75,13 @@ def tf_to_dict(msg: Any) -> Dict[str, Any]:
     return {"transforms": transforms}
 
 
-def _sanitize_float(v: float) -> float:
-    """Replace a single NaN/Inf with 0.0."""
-    if math.isnan(v) or math.isinf(v):
+def _sanitize_float(v: Any) -> float:
+    """Replace a single NaN/Inf with 0.0. Handles non-float types safely."""
+    try:
+        fv = float(v)
+        return 0.0 if (math.isnan(fv) or math.isinf(fv)) else fv
+    except (TypeError, ValueError):
         return 0.0
-    return v
 
 
 def imu_to_dict(msg: Any) -> Dict[str, Any]:
@@ -390,6 +400,50 @@ def camera_info_to_dict(msg: Any) -> Dict[str, Any]:
         "D": list(msg.d) if hasattr(msg, "d") else [],
         "K": list(msg.k) if hasattr(msg, "k") else [],
         "frame_id": getattr(msg.header, "frame_id", "") if hasattr(msg, "header") else "",
+    }
+
+
+def diagnostic_array_to_dict(msg: Any) -> Dict[str, Any]:
+    """Convert diagnostic_msgs/msg/DiagnosticArray to dict."""
+    statuses = []
+    for s in msg.status:
+        statuses.append({
+            "level": int(s.level),
+            "name": getattr(s, "name", ""),
+            "message": getattr(s, "message", ""),
+            "hardware_id": getattr(s, "hardware_id", ""),
+            "values": [
+                {"key": v.key, "value": v.value}
+                for v in (s.values or [])
+            ],
+        })
+    return {"statuses": statuses}
+
+
+def navsatfix_to_dict(msg: Any) -> Dict[str, Any]:
+    """Convert sensor_msgs/msg/NavSatFix to dict."""
+    sf = _sanitize_float
+    return {
+        "latitude": sf(msg.latitude),
+        "longitude": sf(msg.longitude),
+        "altitude": sf(msg.altitude),
+        "status": int(msg.status.status) if hasattr(msg.status, "status") else -1,
+        "timestamp": (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
+        if hasattr(msg, "header") else 0.0,
+    }
+
+
+def dict_to_twist(data: Dict[str, Any]) -> Dict[str, float]:
+    """Convert {linear: {x,y,z}, angular: {x,y,z}} to flat dict for Twist construction."""
+    linear = data.get("linear", {})
+    angular = data.get("angular", {})
+    return {
+        "linear_x": float(linear.get("x", 0)),
+        "linear_y": float(linear.get("y", 0)),
+        "linear_z": float(linear.get("z", 0)),
+        "angular_x": float(angular.get("x", 0)),
+        "angular_y": float(angular.get("y", 0)),
+        "angular_z": float(angular.get("z", 0)),
     }
 
 
