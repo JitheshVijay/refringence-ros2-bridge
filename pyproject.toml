@@ -16,6 +16,10 @@ dependencies = [
 
 [project.optional-dependencies]
 ros2 = []  # rclpy and ROS 2 msgs installed via ROS 2 toolchain, not pip
+# Pillow powers image_to_dict()'s JPEG encoding. The bridge degrades
+# gracefully without it, so it stays optional -- install with
+# `pip install -e .[images]` to bridge camera topics.
+images = ["Pillow>=9.0"]
 
 [project.scripts]
 refringence-bridge = "refringence_bridge.cli:main"

@@ -1,7 +1,13 @@
 """Unit tests for topic_bridge.py message serialization."""
 
+import importlib.util
 import unittest
 from types import SimpleNamespace
+
+# image_to_dict() encodes JPEGs through Pillow and fails soft when it is not
+# installed. Pillow is an optional extra (see pyproject [images]), so these
+# tests skip rather than fail on a bare install.
+HAS_PILLOW = importlib.util.find_spec("PIL") is not None
 
 from refringence_bridge.topic_bridge import (
     joint_state_to_dict,
@@ -228,6 +234,7 @@ class TestRosoutToDict(unittest.TestCase):
             self.assertEqual(result["level"], level)
 
 
+@unittest.skipUnless(HAS_PILLOW, "Pillow not installed (optional [images] extra)")
 class TestImageToDict(unittest.TestCase):
     def _make_image(self, width, height, encoding="rgb8", data=None):
         if data is None:
